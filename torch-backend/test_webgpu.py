@@ -110,6 +110,50 @@ def test_matrix_multiplication(matrix_tensors):
     
     np.testing.assert_allclose(mm_cpu_from_gpu.numpy(), mm_cpu.numpy(), rtol=1e-4, atol=1e-4)
     print("Matrix multiplication test passed!")
+    
+def test_vector_matrix_multiplication(random_tensors, webgpu_device):
+    """Test vector-matrix multiplication on WebGPU."""
+    a, b, _ = random_tensors
+    
+    # Create a vector (1D tensor) and a matrix
+    vector = a[0, 0, :]  # Shape: (10,)
+    matrix = b[:, 0, :].t()  # Shape: (10, 10)
+    
+    # Move to GPU
+    vector_gpu = vector.to(webgpu_device)
+    matrix_gpu = matrix.to(webgpu_device)
+    
+    # We need to reshape the vector to 2D for mm operation
+    vector_2d = vector.reshape(1, -1)  # Shape: (1, 10)
+    vector_2d_gpu = vector_gpu.reshape(1, -1)
+    
+    # Matrix multiplication on GPU: (1, 10) @ (10, 10) = (1, 10)
+    mm_gpu = torch.mm(vector_2d_gpu, matrix_gpu)
+    mm_cpu_from_gpu = mm_gpu.to("cpu")
+    
+    # Matrix multiplication on CPU
+    mm_cpu = torch.mm(vector_2d, matrix)
+    
+    # Verify vector-matrix multiplication
+    max_diff_mm = torch.max(torch.abs(mm_cpu_from_gpu - mm_cpu)).item()
+    print(f"Maximum difference between WebGPU and CPU vector-matrix multiplication: {max_diff_mm}")
+    
+    np.testing.assert_allclose(mm_cpu_from_gpu.numpy(), mm_cpu.numpy(), rtol=1e-4, atol=1e-4)
+    
+    # Also test the @ operator, which should handle the broadcasting automatically
+    matmul_gpu = vector_gpu @ matrix_gpu
+    matmul_cpu_from_gpu = matmul_gpu.to("cpu")
+    
+    # Matrix multiplication on CPU using @ operator
+    matmul_cpu = vector @ matrix
+    
+    # Verify @ operator multiplication
+    max_diff_matmul = torch.max(torch.abs(matmul_cpu_from_gpu - matmul_cpu)).item()
+    print(f"Maximum difference between WebGPU and CPU @ operator multiplication: {max_diff_matmul}")
+    
+    np.testing.assert_allclose(matmul_cpu_from_gpu.numpy(), matmul_cpu.numpy(), rtol=1e-4, atol=1e-4)
+    
+    print("Vector-matrix multiplication test passed!")
 
 def test_relu_activation(tensors_on_device):
     """Test ReLU activation on WebGPU."""
@@ -132,6 +176,49 @@ def test_relu_activation(tensors_on_device):
     
     np.testing.assert_allclose(relu_cpu_from_gpu.numpy(), relu_cpu.numpy(), rtol=1e-5, atol=1e-5)
     print("ReLU activation test passed!")
+    
+def test_as_strided(tensors_on_device):
+    """Test as_strided operation on WebGPU."""
+    a_gpu, _, a, _ = tensors_on_device
+    
+    # Original tensor shape is (10, 10, 10)
+    # Extract a (2, 2) matrix from the first slice with different strides and offsets
+    
+    # Case 1: Extract a 2x2 submatrix with default strides
+    size = (2, 2)
+    stride = (1, 10)  # Move 1 element to the next row, 10 elements to the next column
+    offset = 0
+    
+    # Apply as_strided on CPU
+    a_strided_cpu = torch.as_strided(a, size, stride, offset)
+    
+    # Apply as_strided on GPU
+    a_strided_gpu = torch.as_strided(a_gpu, size, stride, offset)
+    a_strided_gpu_cpu = a_strided_gpu.to("cpu")
+    
+    # Verify results
+    max_diff = torch.max(torch.abs(a_strided_gpu_cpu - a_strided_cpu)).item()
+    print(f"Maximum difference between WebGPU and CPU as_strided (case 1): {max_diff}")
+    np.testing.assert_allclose(a_strided_gpu_cpu.numpy(), a_strided_cpu.numpy(), rtol=1e-5, atol=1e-5)
+    
+    # Case 2: Extract a 2x3 submatrix with custom strides and offset
+    size = (2, 3)
+    stride = (10, 1)  # Move 10 elements to the next row, 1 element to the next column
+    offset = 5  # Start from the 5th element
+    
+    # Apply as_strided on CPU
+    a_strided_cpu2 = torch.as_strided(a, size, stride, offset)
+    
+    # Apply as_strided on GPU
+    a_strided_gpu2 = torch.as_strided(a_gpu, size, stride, offset)
+    a_strided_gpu_cpu2 = a_strided_gpu2.to("cpu")
+    
+    # Verify results
+    max_diff2 = torch.max(torch.abs(a_strided_gpu_cpu2 - a_strided_cpu2)).item()
+    print(f"Maximum difference between WebGPU and CPU as_strided (case 2): {max_diff2}")
+    np.testing.assert_allclose(a_strided_gpu_cpu2.numpy(), a_strided_cpu2.numpy(), rtol=1e-5, atol=1e-5)
+    
+    print("as_strided test passed!")
 
 if __name__ == "__main__":
     # When running as a script, we need to create the data directly instead of using fixtures
@@ -162,7 +249,9 @@ if __name__ == "__main__":
     test_tensor_addition((a_gpu, b_gpu, a, b))
     test_scalar_addition((a_gpu, b_gpu, a, b))
     test_matrix_multiplication((a_2d_gpu, b_2d_gpu, a_2d, b_2d))
+    test_vector_matrix_multiplication((a, b, shape), device)
     test_relu_activation((a_gpu, b_gpu, a, b))
+    test_as_strided((a_gpu, b_gpu, a, b))
     
     print("\nAll tests passed successfully!")
     
