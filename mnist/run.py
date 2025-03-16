@@ -84,12 +84,12 @@ def load_mnist_images(data_dir='data', train=False, num_samples=10):
 
 def main():
     # Load the model parameters
-    model_path = '/Users/alberthyang/Code/gpu-hack/mnist/mnist_model.pth'
+    model_path = 'mnist/mnist_model.pth'
     fc1_weight, fc1_bias, fc2_weight, fc2_bias = load_and_convert_model(model_path)
     
     try:
         # Try to load real MNIST images
-        images, labels = load_mnist_images(data_dir='/Users/alberthyang/Code/gpu-hack/data', train=False, num_samples=10)
+        images, labels = load_mnist_images(data_dir='data', train=False, num_samples=10)
         print(f"Loaded {len(images)} MNIST test images")
 
         # Classify each image
