@@ -1,18 +1,22 @@
 import torch
 import torch.nn as nn
 import os
+import torch
 from torchvision.datasets.mnist import read_image_file, read_label_file
+
+import torch_backend.webgpu_backend as webgpu_backend
 
 
 def load_and_convert_model(model_path):
     # Load the model
-    state_dict = torch.load(model_path, map_location=torch.device('cpu'))
+    #state_dict = torch.load(model_path, map_location=torch.device('webgpu'))
+    state_dict = torch.load(model_path)
     
     # Extract weights and biases
-    fc1_weight = state_dict['fc1.weight']  # [5000, 784]
-    fc1_bias = state_dict['fc1.bias']      # [5000]
-    fc2_weight = state_dict['fc2.weight']  # [10, 5000]
-    fc2_bias = state_dict['fc2.bias']      # [10]
+    fc1_weight = state_dict['fc1.weight'].T.to('webgpu')  # [5000, 784]
+    fc1_bias = state_dict['fc1.bias'].to('webgpu')      # [5000]
+    fc2_weight = state_dict['fc2.weight'].T.to('webgpu')  # [10, 5000]
+    fc2_bias = state_dict['fc2.bias'].to('webgpu')      # [10]
     
     return fc1_weight, fc1_bias, fc2_weight, fc2_bias
 
@@ -29,22 +33,24 @@ def classify_image(image, fc1_weight, fc1_bias, fc2_weight, fc2_bias):
         predicted class (0-9)
     """
     # Flatten the image to [784]
-    x = image.flatten()
+    x = image.flatten().to('webgpu')
     
     # First matmul: [784] x [5000, 784]^T = [5000]
-    z1 = torch.matmul(x, fc1_weight.t()) + fc1_bias
-    
+    z1 = torch.mm(x, fc1_weight) + fc1_bias
+
     # First ReLU
     a1 = torch.relu(z1)
     
     # Second matmul: [5000] x [10, 5000]^T = [10]
-    z2 = torch.matmul(a1, fc2_weight.t()) + fc2_bias
+    z2 = torch.mm(a1, fc2_weight) + fc2_bias
     
     # Second ReLU
     a2 = torch.relu(z2)
-    
+
+    thing = a2.to('cpu')
+
     # Return the class with highest score
-    return torch.argmax(a2).item()
+    return torch.argmax(thing).item()
 
 
 def load_mnist_images(data_dir='data', train=False, num_samples=10):
@@ -80,7 +86,7 @@ def load_mnist_images(data_dir='data', train=False, num_samples=10):
 
 def main():
     # Load the model parameters
-    model_path = 'mnist_model.pth'
+    model_path = '/Users/alberthyang/Code/gpu-hack/mnist/mnist_model.pth'
     fc1_weight, fc1_bias, fc2_weight, fc2_bias = load_and_convert_model(model_path)
     
     try:
