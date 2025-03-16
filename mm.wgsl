@@ -1,32 +1,32 @@
 struct Matrix {
-    size: vec2<u32>,  // Matrix dimensions (rows, cols)
-    numbers: array<f32>,  // Flattened matrix data
+  data: array<f32>,
 };
 
-@group(0) @binding(0) var<storage, read> a: Matrix;
-@group(0) @binding(1) var<storage, read> b: Matrix;
-@group(0) @binding(2) var<storage, read_write> result: Matrix;
+@group(0) @binding(0)
+var<storage, read> matrixA: Matrix;
 
-@compute @workgroup_size(8, 8)  // Defines 8x8 workgroup threads
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let rowsA = a.size.x;
-    let colsA = a.size.y;
-    let colsB = b.size.y;
+@group(0) @binding(1)
+var<storage, read> matrixB: Matrix;
 
-    let row = id.x;
-    let col = id.y;
+@group(0) @binding(2)
+var<storage, read_write> matrixC: Matrix;
 
-    if (row >= rowsA || col >= colsB) {
-        return; // Out-of-bounds check
-    }
+@group(0) @binding(3)
+var<uniform> dims: u32;
 
+@compute @workgroup_size(16, 16)
+fn main(@builtin(global_invocation_id) GlobalInvocationID: vec3<u32>) {
+  let row: u32 = GlobalInvocationID.x;
+  let col: u32 = GlobalInvocationID.y;
+  let N: u32 = dims;
+
+  if (row < N && col < N) {
     var sum: f32 = 0.0;
-    for (var i: u32 = 0; i < colsA; i = i + 1) {
-        let indexA = row * colsA + i;
-        let indexB = i * colsB + col;
-        sum = sum + a.numbers[indexA] * b.numbers[indexB];
+    for (var k: u32 = 0u; k < N; k = k + 1u) {
+      let a: f32 = matrixA.data[row * N + k];
+      let b: f32 = matrixB.data[k * N + col];
+      sum = sum + a * b;
     }
-
-    let indexResult = row * colsB + col;
-    result.numbers[indexResult] = sum;
+    matrixC.data[row * N + col] = sum;
+  }
 }
