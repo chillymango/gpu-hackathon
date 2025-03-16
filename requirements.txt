@@ -4,3 +4,4 @@ glfw
 torch
 torchvision
 torchaudio
+matplotlib
