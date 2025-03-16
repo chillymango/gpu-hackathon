@@ -25,17 +25,20 @@ class CustomMNIST(MNIST):
 
 # Define the neural network architecture
 class MNISTNet(nn.Module):
-    def __init__(self, hidden_size=5000):
+    def __init__(self, hidden_size=2500):
         super(MNISTNet, self).__init__()
         self.fc1 = nn.Linear(28 * 28, hidden_size)  # Input layer: 28x28 pixels flattened
         self.relu1 = nn.ReLU()
-        self.fc2 = nn.Linear(hidden_size, 10)  # Output layer: 10 classes (digits 0-9)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
         self.relu2 = nn.ReLU()
+        self.fc3 = nn.Linear(hidden_size, 10)  # Output layer: 10 classes (digits 0-9)
+        self.relu3 = nn.ReLU()
         
     def forward(self, x):
         x = x.view(-1, 28 * 28)  # Flatten the input
         x = self.relu1(self.fc1(x))
         x = self.relu2(self.fc2(x))
+        x = self.relu3(self.fc3(x))
         return x
 
 # Set device

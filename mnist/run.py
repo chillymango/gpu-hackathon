@@ -47,10 +47,8 @@ def classify_image(image, fc1_weight, fc1_bias, fc2_weight, fc2_bias):
     # Second ReLU
     a2 = torch.relu(z2)
 
-    thing = a2.to('cpu')
-
     # Return the class with highest score
-    return torch.argmax(thing).item()
+    return torch.argmax(a2).item()
 
 
 def load_mnist_images(data_dir='data', train=False, num_samples=10):

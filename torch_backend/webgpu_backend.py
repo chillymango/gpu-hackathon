@@ -509,8 +509,16 @@ def webgpu_mm(a, b):
     b_data = get_data(b)
     
     # Matrix shapes
-    m, k = a.shape
-    k2, n = b.shape
+    if len(a.shape) == 1:
+        m = 1
+        k = a.shape[0]
+    else:
+        m, k = a.shape
+    if len(b.shape) == 1:
+        k2 = b.shape[0]
+        n = 1
+    else:
+        k2, n = b.shape
     
     if k != k2:
         raise ValueError(f"Incompatible matrix shapes for multiplication: {a.shape} and {b.shape}")
