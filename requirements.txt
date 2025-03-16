@@ -1,3 +1,6 @@
 numpy
 wgpu
 glfw
+torch
+torchvision
+torchaudio
