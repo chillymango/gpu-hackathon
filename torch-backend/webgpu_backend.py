@@ -109,6 +109,7 @@ def get_matmul_shader():
 
 # Shader for element-wise add
 def get_add_shader():
+    print("Get add shader")
     if "add" not in shader_cache:
         shader_cache["add"] = """
         @group(0) @binding(0)
@@ -200,13 +201,14 @@ def empty_memory_format(size, dtype=None, layout=None, device=None, pin_memory=F
 # Register our backend with PyTorch
 torch.utils.rename_privateuse1_backend("webgpu")
 torch._register_device_module("webgpu", WebGPUBackend())
+torch.utils.generate_methods_for_privateuse1_backend()
 
 # Register the implementations with PyTorch
-@torch.library.impl("aten::empty.memory_format", "privateuseone")
+@torch.library.impl("aten::empty.memory_format", "webgpu")
 def empty_memory_format_impl(size, dtype=None, layout=None, device=None, pin_memory=False, memory_format=None):
     return empty_memory_format(size, dtype, layout, device, pin_memory, memory_format)
 
-@torch.library.impl("aten::_to_copy", "privateuseone")
+@torch.library.impl("aten::_to_copy", "webgpu")
 def _to_copy(tensor, **kwargs):
     print(f"WebGPU: Converting tensor with shape {tensor.shape} to CPU or other device")
     
@@ -230,7 +232,7 @@ def _to_copy(tensor, **kwargs):
         # For other devices, use the default PyTorch implementation
         return torch.empty(tensor.shape, device=kwargs.get('device', 'cpu'), dtype=kwargs.get('dtype', tensor.dtype))
 
-@torch.library.impl("aten::zeros", "privateuseone")
+@torch.library.impl("aten::zeros", "webgpu")
 def zeros(size, dtype=None, layout=None, device=None, pin_memory=False):
     print(f"WebGPU: Creating zeros tensor with size {size}")
     # Create an empty tensor
@@ -242,7 +244,7 @@ def zeros(size, dtype=None, layout=None, device=None, pin_memory=False):
     
     return tensor
 
-@torch.library.impl("aten::ones", "privateuseone")
+@torch.library.impl("aten::ones", "webgpu")
 def ones(size, dtype=None, layout=None, device=None, pin_memory=False):
     print(f"WebGPU: Creating ones tensor with size {size}")
     # Create an empty tensor
@@ -254,7 +256,7 @@ def ones(size, dtype=None, layout=None, device=None, pin_memory=False):
     
     return tensor
 
-@torch.library.impl("aten::add.Tensor", "privateuseone")
+@torch.library.impl("aten::add.Tensor", "webgpu")
 def add_tensor(input, other, alpha=1):
     print(f"WebGPU: Adding tensors with shapes {input.shape} and {other.shape}")
     
@@ -294,7 +296,7 @@ def add_tensor(input, other, alpha=1):
         1: other_data.flatten(),
         3: np.array([alpha], dtype=np.float32)
     }
-    
+
     # Set up and run the compute operation
     out = compute_with_buffers(
         input_arrays=bindings,
@@ -302,14 +304,14 @@ def add_tensor(input, other, alpha=1):
         shader=get_add_shader(),
         n=(np.prod(input.shape), 1, 1)
     )
-    
+
     # Update the output tensor
     output_data = tensor_storage.get(output)
     output_data["data"] = np.frombuffer(out[2], dtype=np.float32).reshape(input.shape)
-    
+
     return output
 
-@torch.library.impl("aten::mul", "privateuseone")
+@torch.library.impl("aten::mul", "webgpu")
 def mul(input, other):
     print(f"WebGPU: Multiplying tensors with shapes {input.shape} and {other.shape}")
     # Get the tensors from storage
@@ -345,7 +347,7 @@ def mul(input, other):
     
     return output
 
-@torch.library.impl("aten::mm", "privateuseone")
+@torch.library.impl("aten::mm", "webgpu")
 def mm(input, other):
     print(f"WebGPU: Matrix multiplying tensors with shapes {input.shape} and {other.shape}")
     # Get the tensors from storage
@@ -390,7 +392,7 @@ def mm(input, other):
     
     return output
 
-@torch.library.impl("aten::relu", "privateuseone")
+@torch.library.impl("aten::relu", "webgpu")
 def relu(input):
     print(f"WebGPU: Computing ReLU of tensor with shape {input.shape}")
     # Get the tensor from storage
@@ -598,6 +600,8 @@ def test_webgpu_backend():
     print("\n=== Basic Tensor Creation ===")
     a = torch.ones(3, 3, device=device)
     b = torch.ones(3, 3, device=device)
+    c = torch.ones(3, 3)
+    test = a@c
     
     print("\n=== Basic Operations ===")
     c = webgpu_add(a, b)
