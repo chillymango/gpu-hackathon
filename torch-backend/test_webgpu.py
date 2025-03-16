@@ -220,6 +220,109 @@ def test_as_strided(tensors_on_device):
     
     print("as_strided test passed!")
 
+def test_argmax(tensors_on_device):
+    """Test argmax operation on WebGPU."""
+    a_gpu, _, a, _ = tensors_on_device
+    
+    # Case 1: Global argmax (flattened tensor)
+    # Find the index of the maximum value in the entire tensor
+    argmax_gpu = torch.argmax(a_gpu)
+    argmax_cpu = torch.argmax(a)
+    
+    # Move the result back to CPU for comparison
+    argmax_gpu_cpu = argmax_gpu.to("cpu")
+    
+    # Verify the global argmax result
+    print(f"Global argmax - GPU: {argmax_gpu_cpu.item()}, CPU: {argmax_cpu.item()}")
+    assert argmax_gpu_cpu.item() == argmax_cpu.item(), "Global argmax values don't match!"
+    
+    # Case 2: Argmax along a specific dimension (dim=0)
+    # For each position in the 2nd and 3rd dimensions, find which slice has the max value
+    argmax_dim0_gpu = torch.argmax(a_gpu, dim=0)
+    argmax_dim0_cpu = torch.argmax(a, dim=0)
+    
+    # Move results back to CPU
+    argmax_dim0_gpu_cpu = argmax_dim0_gpu.to("cpu")
+    
+    # Verify the shape
+    assert argmax_dim0_gpu_cpu.shape == argmax_dim0_cpu.shape, "Shape mismatch for argmax along dim 0"
+    
+    # Verify the values
+    matches = (argmax_dim0_gpu_cpu == argmax_dim0_cpu).all().item()
+    print(f"Argmax along dim 0 - Exact match: {matches}")
+    assert matches, "Argmax along dim 0 values don't match!"
+    
+    # Case 3: Argmax along a specific dimension (dim=1)
+    # For each position in the 1st and 3rd dimensions, find which slice has the max value
+    argmax_dim1_gpu = torch.argmax(a_gpu, dim=1)
+    argmax_dim1_cpu = torch.argmax(a, dim=1)
+    
+    # Move results back to CPU
+    argmax_dim1_gpu_cpu = argmax_dim1_gpu.to("cpu")
+    
+    # Verify the shape
+    assert argmax_dim1_gpu_cpu.shape == argmax_dim1_cpu.shape, "Shape mismatch for argmax along dim 1"
+    
+    # Verify the values
+    matches = (argmax_dim1_gpu_cpu == argmax_dim1_cpu).all().item()
+    print(f"Argmax along dim 1 - Exact match: {matches}")
+    assert matches, "Argmax along dim 1 values don't match!"
+    
+    # Case 4: Argmax along the last dimension (dim=2)
+    # For each position in the 1st and 2nd dimensions, find which value is the maximum
+    argmax_dim2_gpu = torch.argmax(a_gpu, dim=2)
+    argmax_dim2_cpu = torch.argmax(a, dim=2)
+    
+    # Move results back to CPU
+    argmax_dim2_gpu_cpu = argmax_dim2_gpu.to("cpu")
+    
+    # Verify the shape
+    assert argmax_dim2_gpu_cpu.shape == argmax_dim2_cpu.shape, "Shape mismatch for argmax along dim 2"
+    
+    # Verify the values
+    matches = (argmax_dim2_gpu_cpu == argmax_dim2_cpu).all().item()
+    print(f"Argmax along dim 2 - Exact match: {matches}")
+    assert matches, "Argmax along dim 2 values don't match!"
+    
+    # Case 5: Argmax with keepdim=True
+    # The output should keep the reduced dimension with size 1
+    argmax_keepdim_gpu = torch.argmax(a_gpu, dim=1, keepdim=True)
+    argmax_keepdim_cpu = torch.argmax(a, dim=1, keepdim=True)
+    
+    # Move results back to CPU
+    argmax_keepdim_gpu_cpu = argmax_keepdim_gpu.to("cpu")
+    
+    # Verify the shape
+    assert argmax_keepdim_gpu_cpu.shape == argmax_keepdim_cpu.shape, f"Shape mismatch for argmax with keepdim (got {argmax_keepdim_gpu_cpu.shape}, expected {argmax_keepdim_cpu.shape})"
+    
+    # Verify the values
+    matches = (argmax_keepdim_gpu_cpu == argmax_keepdim_cpu).all().item()
+    print(f"Argmax with keepdim - Exact match: {matches}")
+    assert matches, "Argmax with keepdim values don't match!"
+    
+    # Case 6: Test with a tensor containing repeated maximum values
+    # Create a tensor with some repeated max values
+    b = torch.zeros((3, 3), dtype=torch.float32)
+    b[0, 0] = 5.0
+    b[1, 1] = 5.0  # Same max value
+    b[2, 2] = 4.0
+    
+    b_gpu = b.to(a_gpu.device)
+    
+    # The argmax should return the index of the first occurrence
+    argmax_b_gpu = torch.argmax(b_gpu)
+    argmax_b_cpu = torch.argmax(b)
+    
+    argmax_b_gpu_cpu = argmax_b_gpu.to("cpu")
+    
+    print(f"Argmax with repeated values - GPU: {argmax_b_gpu_cpu.item()}, CPU: {argmax_b_cpu.item()}")
+    assert argmax_b_gpu_cpu.item() == argmax_b_cpu.item(), "Argmax with repeated values doesn't match!"
+    
+    # For a flattened tensor, the first 5.0 is at index 0
+    assert argmax_b_gpu_cpu.item() == 0, "Argmax should return the first occurrence"
+    
+    print("Argmax tests passed!")
+
 if __name__ == "__main__":
     # When running as a script, we need to create the data directly instead of using fixtures
     # Set random seed
@@ -252,6 +355,7 @@ if __name__ == "__main__":
     test_vector_matrix_multiplication((a, b, shape), device)
     test_relu_activation((a_gpu, b_gpu, a, b))
     test_as_strided((a_gpu, b_gpu, a, b))
+    test_argmax((a_gpu, b_gpu, a, b))
     
     print("\nAll tests passed successfully!")
     
