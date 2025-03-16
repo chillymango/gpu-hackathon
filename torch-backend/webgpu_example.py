@@ -39,7 +39,6 @@ def main():
     
     # Try direct function calls with our wrapper functions
     print("Using direct WebGPU compute operations...")
-    import webgpu_backend
     c_direct = webgpu_backend.webgpu_add(a, b)
     print("Direct WebGPU add completed")
     
