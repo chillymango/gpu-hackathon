@@ -666,9 +666,38 @@ def execute_webgpu_shader(shader_code, bindings, output_shape, workgroup_size=(2
 
 # ===== WebGPU Operation Implementations =====
 
+def device_guard(*tensors):
+    """
+    Check that all tensors are on the same device.
+    Raises a RuntimeError if tensors are on different devices.
+    """
+    if not tensors:
+        return
+    
+    # Get the device of the first tensor
+    first_device = tensors[0].device
+    
+    # Check that all tensors are on the same device
+    for i, tensor in enumerate(tensors[1:], 1):
+        if tensor.device != first_device:
+            raise RuntimeError(
+                f"Expected all tensors to be on the same device, but found at least two devices, "
+                f"{first_device} and {tensor.device}! Tensor 0 is on {first_device} and "
+                f"tensor {i} is on {tensor.device}."
+            )
+    
+    # Check that the device is a WebGPU device
+    if first_device.type != 'webgpu':
+        raise RuntimeError(
+            f"Expected all tensors to be on a WebGPU device, but found {first_device}."
+        )
+
 def webgpu_add(a, b, alpha=1):
     if TORCH_DEBUG:
         print(f"WebGPU add operation: {a.shape} + {b.shape}")
+    
+    # Check that tensors are on the same device
+    device_guard(a, b)
 
     # Get or create WebGPU buffers
     a_buffer = get_or_create_buffer(a)
@@ -713,6 +742,9 @@ def webgpu_mul(a, b):
     if TORCH_DEBUG:
         print(f"WebGPU multiply operation: {a.shape} * {b.shape}")
 
+    # Check that tensors are on the same device
+    device_guard(a, b)
+
     # Get or create WebGPU buffers
     a_buffer = get_or_create_buffer(a)
     b_buffer = get_or_create_buffer(b)
@@ -744,6 +776,120 @@ def webgpu_mul(a, b):
     
     return result_tensor
 
+def webgpu_mm(a, b):
+    if TORCH_DEBUG:
+        print(f"WebGPU matrix multiply operation: {a.shape} @ {b.shape}")
+    
+    # Check that tensors are on the same device
+    device_guard(a, b)
+    
+    # Matrix shapes
+    if len(a.shape) == 1:
+        m = 1
+        k = a.shape[0]
+    else:
+        m, k = a.shape
+    if len(b.shape) == 1:
+        k2 = b.shape[0]
+        n = 1
+    else:
+        k2, n = b.shape
+
+    if k != k2:
+        raise ValueError(f"Incompatible matrix shapes for multiplication: {a.shape} and {b.shape}")
+    
+    # Get or create WebGPU buffers
+    a_buffer = get_or_create_buffer(a)
+    b_buffer = get_or_create_buffer(b)
+    
+    # Create shape buffers
+    a_shape_data = np.array([m, k], dtype=np.uint32)
+    b_shape_data = np.array([k, n], dtype=np.uint32)
+    
+    a_shape_buffer = device.create_buffer_with_data(
+        data=a_shape_data,
+        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST,
+    )
+    
+    b_shape_buffer = device.create_buffer_with_data(
+        data=b_shape_data,
+        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST,
+    )
+    
+    # Create output buffer
+    output_size = m * n
+    output_buffer = device.create_buffer(
+        size=output_size * 4,  # 4 bytes per float32
+        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_SRC,
+    )
+    
+    # Set up bindings
+    bindings = [
+        (a_buffer, 'read_only_storage'),
+        (b_buffer, 'read_only_storage'),
+        (output_buffer, 'storage'),
+        (a_shape_buffer, 'read_only_storage'),
+        (b_shape_buffer, 'read_only_storage')
+    ]
+    
+    # Execute shader with custom workgroup size and dispatch size for matrix multiplication
+    workgroup_size = (8, 8, 1)  # 8x8 workgroup size as defined in the shader
+    dispatch_size = (
+        (n + workgroup_size[0] - 1) // workgroup_size[0],
+        (m + workgroup_size[1] - 1) // workgroup_size[1],
+        1
+    )
+    
+    output_buffer = execute_webgpu_shader(
+        shader_code=get_matmul_shader(),
+        bindings=bindings,
+        output_shape=(m, n),
+        workgroup_size=workgroup_size,
+        dispatch_size=dispatch_size
+    )
+    
+    # Create a new tensor that references the output buffer
+    result_tensor = mod.wrap(np.empty((m, n), dtype=np.float32), _to_torch_dtype(np.float32), 0)
+    gpu_data.store(result_tensor, None, output_buffer)
+    
+    return result_tensor
+
+def webgpu_relu(a):
+    if TORCH_DEBUG:
+        print(f"WebGPU ReLU operation: {a.shape}")
+
+    # Check that tensor is on a WebGPU device
+    device_guard(a)
+
+    # Get or create WebGPU buffers
+    a_buffer = get_or_create_buffer(a)
+    
+    # Create output buffer
+    output_size = np.prod(a.shape)
+    output_buffer = device.create_buffer(
+        size=output_size * 4,  # 4 bytes per float32
+        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_SRC,
+    )
+    
+    # Set up bindings
+    bindings = [
+        (a_buffer, 'read_only_storage'),
+        (output_buffer, 'storage')
+    ]
+    
+    # Execute shader
+    output_buffer = execute_webgpu_shader(
+        shader_code=get_relu_shader(),
+        bindings=bindings,
+        output_shape=a.shape
+    )
+    
+    # Create a new tensor that references the output buffer
+    result_tensor = mod.wrap(np.empty(a.shape, dtype=np.float32), _to_torch_dtype(np.float32), 0)
+    gpu_data.store(result_tensor, None, output_buffer)
+    
+    return result_tensor
+
 def webgpu_argmax(tensor, dim=None, keepdim=False):
     """
     Returns the indices of the maximum values of a tensor across a dimension.
@@ -759,6 +905,9 @@ def webgpu_argmax(tensor, dim=None, keepdim=False):
     """
     if TORCH_DEBUG:
         print(f"WebGPU argmax operation: {tensor.shape}, dim={dim}, keepdim={keepdim}")
+
+    # Check that tensor is on a WebGPU device
+    device_guard(tensor)
 
     # Handle the case of flattened argmax (no dimension specified)
     if dim is None:
@@ -798,10 +947,10 @@ def webgpu_argmax(tensor, dim=None, keepdim=False):
             output_buffer, 0, staging_buffer, 0, 4
         )
         device.queue.submit([command_encoder.finish()])
-        
+
         # Read the result
-        staging_buffer.map_read()
-        result_idx = np.frombuffer(staging_buffer.read_mapped_range(0, 4), dtype=np.uint32)[0]
+        staging_buffer.map_sync(wgpu.MapMode.READ)
+        result_idx = np.frombuffer(staging_buffer.read_mapped(0, 4), dtype=np.uint32)[0]
         staging_buffer.unmap()
         
         # Create and return a scalar tensor with the result
@@ -847,13 +996,86 @@ def webgpu_argmax(tensor, dim=None, keepdim=False):
             usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST | wgpu.BufferUsage.COPY_SRC,
         )
         
-        # Store the buffer and data
+        # Store the buffer and data, and make sure to update the shape_dict with the correct shape
         gpu_data.store(result_tensor, result_data, buffer)
+        
+        # Explicitly update the shape in shape_dict to match the result_data shape
+        gpu_data.shape_dict[id(result_tensor)] = result_data.shape
         
         # Drop the host memory copy
         gpu_data.drop_host_data(result_tensor)
         
         return result_tensor
+
+def webgpu_strided_copy(tensor, size, stride, storage_offset=0):
+    """
+    Implementation of as_strided using WebGPU compute shader.
+
+    Creates a new tensor from the input tensor using the specified strides.
+    """
+    # Check that tensor is on a WebGPU device
+    device_guard(tensor)
+    
+    # Get or create WebGPU buffer for input tensor
+    input_buffer = get_or_create_buffer(tensor)
+    
+    # Create output buffer
+    output_size = np.prod(size)
+    output_buffer = device.create_buffer(
+        size=output_size * 4,  # 4 bytes per float32
+        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_SRC,
+    )
+    
+    # Create dims buffer
+    dims_data = np.array(size, dtype=np.uint32)
+    dims_buffer = device.create_buffer_with_data(
+        data=dims_data,
+        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST,
+    )
+    
+    # Create strides buffer
+    strides_data = np.array(stride, dtype=np.uint32)
+    strides_buffer = device.create_buffer_with_data(
+        data=strides_data,
+        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST,
+    )
+    
+    # Create params buffer
+    params_data = np.array([storage_offset], dtype=np.uint32)
+    params_buffer = device.create_buffer_with_data(
+        data=params_data,
+        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST,
+    )
+    
+    # Set up bindings
+    bindings = [
+        (input_buffer, 'read_only_storage'),
+        (output_buffer, 'storage'),
+        (dims_buffer, 'read_only_storage'),
+        (strides_buffer, 'read_only_storage'),
+        (params_buffer, 'read_only_storage')
+    ]
+    
+    # Calculate padded size for dispatch
+    ndim = len(size)
+    # Convert size to list before concatenating
+    size_list = list(size)
+    padded_size = tuple(size_list + [1] * (3 - ndim))
+    
+    # Execute shader
+    output_buffer = execute_webgpu_shader(
+        shader_code=get_strided_copy_shader(),
+        bindings=bindings,
+        output_shape=size,
+        workgroup_size=(8, 8, 8),
+        dispatch_size=padded_size
+    )
+    
+    # Create a new tensor that references the output buffer
+    result_tensor = mod.wrap(np.empty(size, dtype=np.float32), _to_torch_dtype(np.float32), 0)
+    gpu_data.store(result_tensor, None, output_buffer)
+    
+    return result_tensor
 
 # ===== Basic implementation of tensor creation =====
 
@@ -861,6 +1083,10 @@ def webgpu_argmax(tensor, dim=None, keepdim=False):
 def empty_memory_format(size, dtype=None, layout=None, device=None, pin_memory=False, memory_format=None):
     if TORCH_DEBUG:
         print(f"WebGPU empty: {size}")
+
+    # Ensure we're creating a tensor on a WebGPU device
+    if device is not None and not str(device).startswith('webgpu'):
+        raise RuntimeError(f"Expected a WebGPU device, but got {device}")
 
     if dtype is None:
         dtype = torch.get_default_dtype()
@@ -890,6 +1116,10 @@ def zeros(size, dtype=None, layout=None, device=None, pin_memory=False):
     if TORCH_DEBUG:
         print(f"WebGPU zeros: {size}")
 
+    # Ensure we're creating a tensor on a WebGPU device
+    if device is not None and not str(device).startswith('webgpu'):
+        raise RuntimeError(f"Expected a WebGPU device, but got {device}")
+
     if dtype is None:
         dtype = torch.get_default_dtype()
 
@@ -917,6 +1147,10 @@ def zeros(size, dtype=None, layout=None, device=None, pin_memory=False):
 def ones(size, dtype=None, layout=None, device=None, pin_memory=False):
     if TORCH_DEBUG:
         print(f"WebGPU ones: {size}")
+
+    # Ensure we're creating a tensor on a WebGPU device
+    if device is not None and not str(device).startswith('webgpu'):
+        raise RuntimeError(f"Expected a WebGPU device, but got {device}")
 
     if dtype is None:
         dtype = torch.get_default_dtype()
@@ -946,6 +1180,12 @@ def _to_copy(tensor, **kwargs):
     device_str = str(kwargs.get('device', 'cpu'))
     if TORCH_DEBUG:
         print(f"WebGPU _to_copy: {tensor.shape} to {device_str}")
+
+    # If we're copying to a WebGPU device, ensure the tensor is on a WebGPU device
+    if device_str.startswith('webgpu'):
+        # Check that tensor is on a WebGPU device or CPU
+        if tensor.device.type != 'cpu' and tensor.device.type != 'webgpu':
+            raise RuntimeError(f"Expected tensor to be on CPU or WebGPU device, but got {tensor.device}")
 
     data = get_data(tensor)
     dtype = kwargs.get('dtype', tensor.dtype)
@@ -1025,71 +1265,6 @@ def get_strided_copy_shader():
         """
     return shader_cache["strided_copy"]
 
-def webgpu_strided_copy(tensor, size, stride, storage_offset=0):
-    """
-    Implementation of as_strided using WebGPU compute shader.
-
-    Creates a new tensor from the input tensor using the specified strides.
-    """
-    # Get or create WebGPU buffer for input tensor
-    input_buffer = get_or_create_buffer(tensor)
-    
-    # Create output buffer
-    output_size = np.prod(size)
-    output_buffer = device.create_buffer(
-        size=output_size * 4,  # 4 bytes per float32
-        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_SRC,
-    )
-    
-    # Create dims buffer
-    dims_data = np.array(size, dtype=np.uint32)
-    dims_buffer = device.create_buffer_with_data(
-        data=dims_data,
-        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST,
-    )
-    
-    # Create strides buffer
-    strides_data = np.array(stride, dtype=np.uint32)
-    strides_buffer = device.create_buffer_with_data(
-        data=strides_data,
-        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST,
-    )
-    
-    # Create params buffer
-    params_data = np.array([storage_offset], dtype=np.uint32)
-    params_buffer = device.create_buffer_with_data(
-        data=params_data,
-        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST,
-    )
-    
-    # Set up bindings
-    bindings = [
-        (input_buffer, 'read_only_storage'),
-        (output_buffer, 'storage'),
-        (dims_buffer, 'read_only_storage'),
-        (strides_buffer, 'read_only_storage'),
-        (params_buffer, 'read_only_storage')
-    ]
-    
-    # Calculate padded size for dispatch
-    ndim = len(size)
-    padded_size = size + (1,) * (3 - ndim)
-    
-    # Execute shader
-    output_buffer = execute_webgpu_shader(
-        shader_code=get_strided_copy_shader(),
-        bindings=bindings,
-        output_shape=size,
-        workgroup_size=(8, 8, 8),
-        dispatch_size=padded_size
-    )
-    
-    # Create a new tensor that references the output buffer
-    result_tensor = mod.wrap(np.empty(size, dtype=np.float32), _to_torch_dtype(np.float32), 0)
-    gpu_data.store(result_tensor, None, output_buffer)
-    
-    return result_tensor
-
 @torch.library.impl("aten::as_strided", "privateuseone")
 def as_strided(tensor: torch.Tensor, size, stride, storage_offset=None):
     """
@@ -1106,6 +1281,9 @@ def as_strided(tensor: torch.Tensor, size, stride, storage_offset=None):
     """
     if TORCH_DEBUG:
         print(f"WebGPU as_strided: {tensor.shape} -> {size}, stride={stride}, offset={storage_offset}")
+
+    # Check that tensor is on a WebGPU device
+    device_guard(tensor)
 
     # Default storage offset is 0
     if storage_offset is None:
@@ -1129,6 +1307,9 @@ def view(tensor, size):
     if TORCH_DEBUG:
         print(f"WebGPU view: {tensor.shape} -> {size}")
 
+    # Check that tensor is on a WebGPU device
+    device_guard(tensor)
+
     # Ensure size is a tuple
     size = tuple(size)
     
@@ -1150,11 +1331,16 @@ def add_tensor(input, other, alpha=1):
 
     # Handle scalar addition
     if not isinstance(other, torch.Tensor):
+        # Check that input tensor is on a WebGPU device
+        device_guard(input)
+        
         # Create a tensor of the same shape filled with the scalar value
         other_data = np.full(input.shape, other, dtype=_from_torch_dtype(input.dtype))
         other_tensor = wrap(other_data)
         return webgpu_add(input, other_tensor, alpha)
 
+    # Check that tensors are on the same device
+    device_guard(input, other)
     return webgpu_add(input, other, alpha)
 
 @torch.library.impl("aten::mul.Tensor", "privateuseone")
@@ -1164,17 +1350,25 @@ def mul_tensor(input, other):
 
     # Handle scalar multiplication
     if not isinstance(other, torch.Tensor):
+        # Check that input tensor is on a WebGPU device
+        device_guard(input)
+        
         # Create a tensor of the same shape filled with the scalar value
         other_data = np.full(input.shape, other, dtype=_from_torch_dtype(input.dtype))
         other_tensor = wrap(other_data)
         return webgpu_mul(input, other_tensor)
 
+    # Check that tensors are on the same device
+    device_guard(input, other)
     return webgpu_mul(input, other)
 
 @torch.library.impl("aten::mm", "privateuseone")
 def mm(input, other):
     if TORCH_DEBUG:
         print(f"WebGPU mm: {input.shape} @ {other.shape}")
+    
+    # Check that tensors are on the same device
+    device_guard(input, other)
     return webgpu_mm(input, other)
 
 @torch.library.impl("aten::matmul", "privateuseone")
@@ -1185,6 +1379,9 @@ def matmul(input, other):
     """
     if TORCH_DEBUG:
         print(f"WebGPU matmul: {input.shape} @ {other.shape}")
+
+    # Check that tensors are on the same device
+    device_guard(input, other)
 
     # Handle the case where input is a vector (1D tensor)
     if input.dim() == 1 and other.dim() == 2:
@@ -1215,6 +1412,9 @@ def matmul(input, other):
 def relu(input):
     if TORCH_DEBUG:
         print(f"WebGPU relu: {input.shape}")
+    
+    # Check that tensor is on a WebGPU device
+    device_guard(input)
     return webgpu_relu(input)
 
 @torch.library.impl("aten::argmax", "privateuseone")
@@ -1222,6 +1422,9 @@ def argmax(input, dim=None, keepdim=False):
     """Implementation for torch.argmax"""
     if TORCH_DEBUG:
         print(f"WebGPU argmax: {input.shape}, dim={dim}, keepdim={keepdim}")
+    
+    # Check that tensor is on a WebGPU device
+    device_guard(input)
     return webgpu_argmax(input, dim, keepdim)
 
 @torch.library.impl("aten::argmax.dim", "privateuseone")
@@ -1229,6 +1432,9 @@ def argmax_dim(input, dim, keepdim=False):
     """Implementation for torch.argmax with dimension"""
     if TORCH_DEBUG:
         print(f"WebGPU argmax.dim: {input.shape}, dim={dim}, keepdim={keepdim}")
+    
+    # Check that tensor is on a WebGPU device
+    device_guard(input)
     return webgpu_argmax(input, dim, keepdim)
 
 # ===== In-place operations =====
@@ -1255,6 +1461,9 @@ def inplace_fn(outvars: str | list[str]):
 def zero_(x):
     if TORCH_DEBUG:
         print(f"zero_ {x.shape}")
+    
+    # Check that tensor is on a WebGPU device
+    device_guard(x)
     
     # Get the buffer
     buffer = gpu_data.get_buffer(x)
@@ -1283,6 +1492,9 @@ def fill_scalar(x, y):
     if TORCH_DEBUG:
         print(f"fill_.Scalar {x.shape} {y}")
     
+    # Check that tensor is on a WebGPU device
+    device_guard(x)
+    
     # Get the buffer
     buffer = gpu_data.get_buffer(x)
     
@@ -1306,116 +1518,11 @@ def fill_scalar(x, y):
 
 @torch.library.impl("aten::_local_scalar_dense", "privateuseone")
 def _local_scalar_dense(tensor):
+    # Check that tensor is on a WebGPU device
+    device_guard(tensor)
+    
     data = unwrap(tensor)
     return data.item() if data.size > 0 else 0
 
 # Generate methods for the privateuse1 backend
 torch.utils.generate_methods_for_privateuse1_backend()
-
-def webgpu_mm(a, b):
-    if TORCH_DEBUG:
-        print(f"WebGPU matrix multiply operation: {a.shape} @ {b.shape}")
-    
-    # Matrix shapes
-    if len(a.shape) == 1:
-        m = 1
-        k = a.shape[0]
-    else:
-        m, k = a.shape
-    if len(b.shape) == 1:
-        k2 = b.shape[0]
-        n = 1
-    else:
-        k2, n = b.shape
-
-    if k != k2:
-        raise ValueError(f"Incompatible matrix shapes for multiplication: {a.shape} and {b.shape}")
-    
-    # Get or create WebGPU buffers
-    a_buffer = get_or_create_buffer(a)
-    b_buffer = get_or_create_buffer(b)
-    
-    # Create shape buffers
-    a_shape_data = np.array([m, k], dtype=np.uint32)
-    b_shape_data = np.array([k, n], dtype=np.uint32)
-    
-    a_shape_buffer = device.create_buffer_with_data(
-        data=a_shape_data,
-        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST,
-    )
-    
-    b_shape_buffer = device.create_buffer_with_data(
-        data=b_shape_data,
-        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST,
-    )
-    
-    # Create output buffer
-    output_size = m * n
-    output_buffer = device.create_buffer(
-        size=output_size * 4,  # 4 bytes per float32
-        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_SRC,
-    )
-    
-    # Set up bindings
-    bindings = [
-        (a_buffer, 'read_only_storage'),
-        (b_buffer, 'read_only_storage'),
-        (output_buffer, 'storage'),
-        (a_shape_buffer, 'read_only_storage'),
-        (b_shape_buffer, 'read_only_storage')
-    ]
-    
-    # Execute shader with custom workgroup size and dispatch size for matrix multiplication
-    workgroup_size = (8, 8, 1)  # 8x8 workgroup size as defined in the shader
-    dispatch_size = (
-        (n + workgroup_size[0] - 1) // workgroup_size[0],
-        (m + workgroup_size[1] - 1) // workgroup_size[1],
-        1
-    )
-    
-    output_buffer = execute_webgpu_shader(
-        shader_code=get_matmul_shader(),
-        bindings=bindings,
-        output_shape=(m, n),
-        workgroup_size=workgroup_size,
-        dispatch_size=dispatch_size
-    )
-    
-    # Create a new tensor that references the output buffer
-    result_tensor = mod.wrap(np.empty((m, n), dtype=np.float32), _to_torch_dtype(np.float32), 0)
-    gpu_data.store(result_tensor, None, output_buffer)
-    
-    return result_tensor
-
-def webgpu_relu(a):
-    if TORCH_DEBUG:
-        print(f"WebGPU ReLU operation: {a.shape}")
-
-    # Get or create WebGPU buffers
-    a_buffer = get_or_create_buffer(a)
-    
-    # Create output buffer
-    output_size = np.prod(a.shape)
-    output_buffer = device.create_buffer(
-        size=output_size * 4,  # 4 bytes per float32
-        usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_SRC,
-    )
-    
-    # Set up bindings
-    bindings = [
-        (a_buffer, 'read_only_storage'),
-        (output_buffer, 'storage')
-    ]
-    
-    # Execute shader
-    output_buffer = execute_webgpu_shader(
-        shader_code=get_relu_shader(),
-        bindings=bindings,
-        output_shape=a.shape
-    )
-    
-    # Create a new tensor that references the output buffer
-    result_tensor = mod.wrap(np.empty(a.shape, dtype=np.float32), _to_torch_dtype(np.float32), 0)
-    gpu_data.store(result_tensor, None, output_buffer)
-    
-    return result_tensor

@@ -133,6 +133,97 @@ def test_relu_activation(tensors_on_device):
     np.testing.assert_allclose(relu_cpu_from_gpu.numpy(), relu_cpu.numpy(), rtol=1e-5, atol=1e-5)
     print("ReLU activation test passed!")
 
+def test_argmax(tensors_on_device):
+    """Test argmax operation on WebGPU."""
+    a_gpu, _, a, _ = tensors_on_device
+    
+    # Test global argmax (no dimension specified)
+    global_argmax_gpu = torch.argmax(a_gpu)
+    global_argmax_cpu = torch.argmax(a)
+    
+    # Move result back to CPU for verification
+    global_argmax_gpu_cpu = global_argmax_gpu.to("cpu")
+    
+    # Verify global argmax
+    assert global_argmax_gpu_cpu.item() == global_argmax_cpu.item()
+    print(f"Global argmax test passed! GPU: {global_argmax_gpu_cpu.item()}, CPU: {global_argmax_cpu.item()}")
+
+def test_device_guard(tensors_on_device):
+    """Test device guard on WebGPU."""
+    a_gpu, b_gpu, a, b = tensors_on_device
+
+    # Test that operations between tensors on different devices fail
+    try:
+        _ = a_gpu + b
+        assert False, "Addition between WebGPU and CPU tensors should fail"
+    except RuntimeError as e:
+        print(f"Addition between WebGPU and CPU tensors correctly failed with: {e}")
+        pass
+    
+    # Test that operations between tensors on the same device succeed
+    try:
+        result = a_gpu + b_gpu
+        assert result.device.type == "webgpu", "Result should be on WebGPU device"
+        print("Addition between WebGPU tensors succeeded as expected")
+    except Exception as e:
+        assert False, f"Addition between WebGPU tensors should succeed, but failed with: {e}"
+    
+    # Test that operations with scalar values work
+    try:
+        result = a_gpu + 1.0
+        assert result.device.type == "webgpu", "Result should be on WebGPU device"
+        print("Addition with scalar value succeeded as expected")
+    except Exception as e:
+        assert False, f"Addition with scalar value should succeed, but failed with: {e}"
+    
+    # Test that device guard works for other operations
+    try:
+        _ = torch.mm(a_gpu[:, 0, :], b[:, 0, :])
+        assert False, "Matrix multiplication between WebGPU and CPU tensors should fail"
+    except RuntimeError as e:
+        print(f"Matrix multiplication between WebGPU and CPU tensors correctly failed with: {e}")
+        pass
+    
+    print("Device guard tests passed!")
+
+def test_memory_optimization(webgpu_device):
+    """Test that host memory is dropped after copying to the device."""
+    import sys
+    import gc
+    
+    # Create a large tensor to make memory usage noticeable
+    shape = (1000, 1000)  # 4MB tensor (4 bytes per float32 * 1M elements)
+    
+    # Record memory usage before creating the tensor
+    gc.collect()
+    memory_before = sys.getsizeof(webgpu_backend.gpu_data.data_dict)
+    
+    # Create a tensor and move it to the device
+    a = torch.rand(shape, dtype=torch.float32)
+    a_gpu = a.to(webgpu_device)
+    
+    # Force garbage collection to clean up any temporary objects
+    gc.collect()
+    
+    # Check that the tensor has a buffer but no host data
+    tensor_id = id(a_gpu)
+    entry = webgpu_backend.gpu_data.data_dict.get(tensor_id)
+    
+    assert entry is not None, "Tensor entry should exist in gpu_data"
+    assert entry['buffer'] is not None, "Tensor should have a GPU buffer"
+    assert entry['data'] is None, "Tensor should not have host data"
+    
+    # Verify we can still get data when needed
+    data = webgpu_backend.get_data(a_gpu)
+    assert data is not None, "Should be able to retrieve data from GPU"
+    assert data.shape == shape, "Retrieved data should have the correct shape"
+    
+    # Verify the data matches the original tensor
+    a_cpu = a_gpu.to("cpu")
+    np.testing.assert_allclose(a_cpu.numpy(), a.numpy(), rtol=1e-5, atol=1e-5)
+    
+    print("Memory optimization test passed!")
+
 if __name__ == "__main__":
     # When running as a script, we need to create the data directly instead of using fixtures
     # Set random seed
@@ -163,6 +254,9 @@ if __name__ == "__main__":
     test_scalar_addition((a_gpu, b_gpu, a, b))
     test_matrix_multiplication((a_2d_gpu, b_2d_gpu, a_2d, b_2d))
     test_relu_activation((a_gpu, b_gpu, a, b))
+    test_argmax((a_gpu, b_gpu, a, b))
+    test_device_guard((a_gpu, b_gpu, a, b))
+    test_memory_optimization(device)
     
     print("\nAll tests passed successfully!")
     
