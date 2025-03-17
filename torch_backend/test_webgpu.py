@@ -33,16 +33,6 @@ def tensors_on_device(random_tensors, webgpu_device):
     return a_gpu, b_gpu, a, b
 
 @pytest.fixture
-def huge_tensors(webgpu_device):
-    """Create huge tensors for testing."""
-    shape = (1000, 1000, 1000)
-    a = torch.rand(shape, dtype=torch.float32)
-    b = torch.rand(shape, dtype=torch.float32)
-    a.to(webgpu_device)
-    b.to(webgpu_device)
-    return a, b, shape
-
-@pytest.fixture
 def matrix_tensors(random_tensors, webgpu_device):
     """Create 2D tensors for matrix multiplication."""
     a, b, _ = random_tensors
@@ -142,11 +132,6 @@ def test_relu_activation(tensors_on_device):
     
     np.testing.assert_allclose(relu_cpu_from_gpu.numpy(), relu_cpu.numpy(), rtol=1e-5, atol=1e-5)
     print("ReLU activation test passed!")
-
-def test_allocation(huge_tensors):
-    print(f"Testing huge tensors")
-    breakpoint()
-    print(f"Done testing huge tensors")
 
 if __name__ == "__main__":
     # When running as a script, we need to create the data directly instead of using fixtures

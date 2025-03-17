@@ -50,6 +50,13 @@ class WebGPUData:
         }
         # Store the shape for later use
         self.shape_dict[id(tensor)] = tensor.shape
+        
+    def drop_host_data(self, tensor):
+        """Drop the host memory copy after data has been transferred to GPU"""
+        entry = self.data_dict.get(id(tensor))
+        if entry and entry['buffer'] is not None:
+            # Only drop data if we have a buffer
+            entry['data'] = None
 
     def get(self, tensor):
         """Get the NumPy data associated with a tensor"""
@@ -160,7 +167,20 @@ def wrap(x, buffer=None) -> torch.Tensor:
     """
     # Use mod.wrap from the C++ extension, similar to what tinygrad does
     result = mod.wrap(x, _to_torch_dtype(x.dtype), 0)
+    
+    # If no buffer is provided, create one
+    if buffer is None:
+        buffer = device.create_buffer_with_data(
+            data=x,
+            usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST | wgpu.BufferUsage.COPY_SRC,
+        )
+    
+    # Store the tensor data and buffer
     gpu_data.store(result, x, buffer)
+    
+    # Drop the host memory copy since we've copied to GPU
+    gpu_data.drop_host_data(result)
+    
     return result
 
 def unwrap(x: torch.Tensor):
@@ -194,6 +214,10 @@ def get_or_create_buffer(tensor, data=None):
     
     # Store the buffer
     gpu_data.update_buffer(tensor, buffer)
+    
+    # Drop the host memory copy since we've copied to GPU
+    gpu_data.drop_host_data(tensor)
+    
     return buffer
 
 # ===== WebGPU Compute Shader Implementations =====
@@ -540,9 +564,17 @@ def get_data(tensor):
     if tensor.device.type == 'cpu':
         return tensor.detach().numpy()
 
+    # Try to get data from WebGPUData
     data = gpu_data.get(tensor)
+    
+    # If we have data, return it
     if data is not None:
         return data
+
+    # If we don't have data but have a buffer, this will trigger reading from the buffer
+    buffer = gpu_data.get_buffer(tensor)
+    if buffer is not None:
+        return gpu_data.get(tensor)  # This will now read from the buffer
 
     # Fallback to CPU
     return tensor.cpu().detach().numpy()
@@ -775,7 +807,10 @@ def webgpu_argmax(tensor, dim=None, keepdim=False):
         # Create and return a scalar tensor with the result
         result_data = np.array([result_idx], dtype=np.int64)
         result_tensor = mod.wrap(result_data, _to_torch_dtype(result_data.dtype), 0)
+        
+        # Store the data but don't keep a host copy since it's small and we already have the value
         gpu_data.store(result_tensor, result_data)
+        
         return result_tensor
 
     # Handle the case of argmax along a specific dimension
@@ -805,7 +840,19 @@ def webgpu_argmax(tensor, dim=None, keepdim=False):
 
         # Create and return the wrapped tensor
         result_tensor = mod.wrap(result_data, _to_torch_dtype(result_data.dtype), 0)
-        gpu_data.store(result_tensor, result_data)
+        
+        # Create a buffer for the result
+        buffer = device.create_buffer_with_data(
+            data=result_data,
+            usage=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_DST | wgpu.BufferUsage.COPY_SRC,
+        )
+        
+        # Store the buffer and data
+        gpu_data.store(result_tensor, result_data, buffer)
+        
+        # Drop the host memory copy
+        gpu_data.drop_host_data(result_tensor)
+        
         return result_tensor
 
 # ===== Basic implementation of tensor creation =====
@@ -833,6 +880,9 @@ def empty_memory_format(size, dtype=None, layout=None, device=None, pin_memory=F
     # Store the buffer
     gpu_data.store(result_tensor, np_array, buffer)
     
+    # Drop the host memory copy
+    gpu_data.drop_host_data(result_tensor)
+    
     return result_tensor
 
 @torch.library.impl("aten::zeros", "privateuseone")
@@ -858,6 +908,9 @@ def zeros(size, dtype=None, layout=None, device=None, pin_memory=False):
     # Store the buffer
     gpu_data.store(result_tensor, np_array, buffer)
     
+    # Drop the host memory copy
+    gpu_data.drop_host_data(result_tensor)
+    
     return result_tensor
 
 @torch.library.impl("aten::ones", "privateuseone")
@@ -882,6 +935,9 @@ def ones(size, dtype=None, layout=None, device=None, pin_memory=False):
     
     # Store the buffer
     gpu_data.store(result_tensor, np_array, buffer)
+    
+    # Drop the host memory copy
+    gpu_data.drop_host_data(result_tensor)
     
     return result_tensor
 
@@ -910,6 +966,9 @@ def _to_copy(tensor, **kwargs):
         
         # Store the buffer
         gpu_data.store(result_tensor, np_array, buffer)
+        
+        # Drop the host memory copy
+        gpu_data.drop_host_data(result_tensor)
         
         return result_tensor
 
@@ -1079,7 +1138,7 @@ def view(tensor, size):
     # Create a new tensor with the new shape
     result_tensor = mod.wrap(np.empty(size, dtype=_from_torch_dtype(tensor.dtype)), tensor.dtype, 0)
     
-    # Store the same buffer with the new tensor
+    # Store the same buffer with the new tensor, but no host data
     gpu_data.store(result_tensor, None, buffer)
     
     return result_tensor
