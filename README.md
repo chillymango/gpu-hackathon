@@ -1,8 +1,10 @@
 # PyTorch WebGPU Backend Prototype
 
-Demonstration of adding a WebGPU backend to PyTorch using [wgpu-py](https://github.com/pygfx/wgpu-py), allowing models to run on any hardware where WebGPU is supported. Built during the [SemiAnalysis Hackathon 2025](https://semianalysis.com/hackathon-2025/)
+Demonstration of adding a WebGPU backend to PyTorch using [wgpu-py](https://github.com/pygfx/wgpu-py), allowing models to run on any GPU where [WebGPU](https://developer.chrome.com/blog/webgpu-io2023) is supported (Macbooks, Raspberry Pis, GH200s, refrigerators, etc). 
 
-Inspired by Tinygrad's [Torch Backend](https://github.com/tinygrad/tinygrad/blob/master/extra/torch_backend/backend.py).
+Built (mostly vibe-coded) at [SemiAnalysis Hackathon 2025](https://semianalysis.com/hackathon-2025/).
+
+The backend integration borrows heavily from Tinygrad's [PyTorch backend](https://github.com/tinygrad/tinygrad/blob/master/extra/torch_backend/backend.py).
 
 ## Status
 
