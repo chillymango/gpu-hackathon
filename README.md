@@ -1,14 +1,15 @@
-# PyTorch WebGPU Backend
+# PyTorch WebGPU Backend Prototype
 
-SemiAnalysis Hackathon Mar 16 2025
+Demonstration of adding a WebGPU backend to PyTorch using [wgpu-py](https://github.com/pygfx/wgpu-py), allowing models to run on any hardware where WebGPU is supported. Built during the [SemiAnalysis Hackathon 2025](https://semianalysis.com/hackathon-2025/)
 
-Inspired by Tinygrad's Torch Backend: https://github.com/tinygrad/tinygrad/blob/master/extra/torch_backend/backend.py
+Inspired by Tinygrad's [Torch Backend](https://github.com/tinygrad/tinygrad/blob/master/extra/torch_backend/backend.py).
 
 ## Status
 
 ### Implemented
 
-The implemented backend supports the following operations:
+The implemented backend supports the following operations for fp32:
+
 * addition
 * elementwise multiplication
 * matrix multiplication
@@ -16,21 +17,41 @@ The implemented backend supports the following operations:
 * argmax
 
 ### Notable Missing Features
+
 * argmax by dimension
 * softmax
+* every other operation...
 
 ## Getting Started
 
 ### Installation
 
-Recommended to install with a virtual environment.
+There's no python package available right now. Install requirements:
 
 ```shell
 pip install -r requirements.txt
-export PYTHONPATH=$PYTHONPATH:$pwd
 ```
 
 ### Usage
+
+```py
+# Import the WebGPU backend to register it with PyTorch
+import torch
+import webgpu_backend
+
+device = torch.device("webgpu")
+a = torch.rand((10, 10, 10), dtype=torch.float32)
+b = torch.rand((10, 10, 10), dtype=torch.float32)
+
+a_gpu = a.to(device)
+b_gpu = b.to(device)
+
+print(a_gpu.device)  # webgpu:0
+c_gpu = a_gpu + b_gpu
+c = c_gpu.to("cpu")
+
+print(c.shape) # torch.Size([10, 10, 10])
+```
 
 We provide a simple use-case, running linear and ReLU for inference on a
 MNIST model. The model itself is not trained using the WebGPU backend, but
@@ -39,7 +60,7 @@ the weights are loaded from `mnist/mnist_model.pth`.
 To run the MNIST example, you can run the following command:
 
 ```shell
-python mnist/run.py
+python -m mnist.run
 ```
 
 ### Testing
